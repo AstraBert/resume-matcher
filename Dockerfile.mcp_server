@@ -1,0 +1,10 @@
+FROM condaforge/miniforge3
+
+WORKDIR /server/
+COPY *.py /server/
+COPY *.sh /server/
+COPY *.yml /server/
+
+RUN bash conda_env.sh
+
+CMD ["bash", "run_mcp_server.sh"]

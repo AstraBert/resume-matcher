@@ -9,10 +9,6 @@ from pydantic import BaseModel
 import json
 import gradio as gr
 import requests as rq
-from os import environ as ENV
-from dotenv import load_dotenv
-
-load_dotenv()
 
 class ApiInput(BaseModel):
     resume: str
@@ -23,12 +19,20 @@ class ApiOutput(BaseModel):
 
 app = FastAPI(default_response_class=ORJSONResponse)
 
+with open("/run/secrets/llamacloud_key") as f:
+    llamacloud_api_key = f.read()
+f.close()
+
+with open("/run/secrets/groq_key") as g:
+    groq_api_key = g.read()
+g.close()
+
 hist = ChatHistory()
-mcp_client = BasicMCPClient("http://localhost:8000/sse")
+mcp_client = BasicMCPClient("http://mcp_server:8000/sse")
 mcp_tools = McpToolSpec(mcp_client)
-llm = Groq(model="qwen-qwq-32b", api_key=ENV["groq_api_key"])
-extractor = LlamaExtract(api_key=ENV["llamacloud_api_key"])
-extractor_agent = extractor.get_agent(id="99d18493-f573-47ba-a421-d3336260d712")
+llm = Groq(model="llama-3.3-70b-versatile", api_key=groq_api_key)
+extractor = LlamaExtract(api_key=llamacloud_api_key)
+extractor_agent = extractor.get_agent(name="resume-parser")
 
 @app.post("/chat")
 async def chat(inpt: ApiInput) -> ApiOutput:
@@ -37,7 +41,7 @@ async def chat(inpt: ApiInput) -> ApiOutput:
         llm = llm,
         name = "ResumeMatcher",
         description="Useful to match resume with jobs scraped from the web",
-        system_prompt="You are the ResumeMatcher agent. Your task is to match a resume with jobs you can find from the web, evaluate the matches and return to the user a comprehensive summary of these matches, using the available tools. You should follow this workflow:\n1. Use the potential job titles contained in the resume data to perform a web search of the jobs and extract the top 5 matches within the EU, using the 'job_searcher' tool (providing it a list of potential job titles)\n2. With the information derived from step (1), pass the candidate profile (from the input resume data) and the jobs (in the same JSON string format as you got them from step (1)) to the 'evaluate_job_match' tool.\n\n3. From the job matching evaluation that you got from step (2), create a final response that summarizes the jobs and reports their match with the candidate. Don't forget to mention the company offering the job, the link to the job posting and the job title.\n\nDo not stop unless you created a final response.",
+        system_prompt="You are the ResumeMatcher agent. Your task is to match a resume with jobs you can find from the web, evaluate the matches and return to the user a comprehensive summary of these matches, using the available tools. You should follow this workflow:\n1. Starting from the candidate description deriving from the resume, transform it into a job searching query to retrieve the top 5 jobs that fit the candidate profile, using the 'job_searcher' tool\n2. With the information derived from step (1), pass the candidate profile (from the input resume data) and the jobs (in the same JSON string format as you got them from step (1)) to the 'evaluate_job_match' tool.\n\n3. From the job matching evaluation that you got from step (2), create a final response that summarizes the jobs and reports their match with the candidate. Don't forget to mention the company offering the job, the link to the job posting and the job title.\n\nDo not stop unless you completed step (1) and (2) and you created a final response.",
         tools = tools
     )
     workflow = AgentWorkflow(
@@ -92,7 +96,7 @@ def bot(history: list):
             res_json = response.json()
             agent_process = res_json["process"]
             answer = res_json["response"]
-            history.append({"role": "assistant", "content": f"## Agent process\n\n{agent_process}"})
+            history.append({"role": "assistant", "content": f"<details>\n\t<summary><b>Agentic Process</b></summary>\n\n{agent_process}\n\n</details>\n\n"})
             history.append({"role": "assistant", "content": answer})
             return history
         else:
@@ -100,8 +104,8 @@ def bot(history: list):
             return history
 
 with gr.Blocks(theme=gr.themes.Soft(), title="Resume Matcher") as demo:
-    title = gr.HTML("<h1 align='center'>Resume Matcher</h1>\n<h2 align='center'>Match your resume with a job in the EU, effortlessly</h2>")
-    chatbot = gr.Chatbot(elem_id="chatbot", bubble_full_width=False, type="messages", min_height=700, min_width=700, label="Pdf2Notes Chat", show_copy_all_button=True)
+    title = gr.HTML("<h1 align='center'>Resume Matcher</h1>\n<h2 align='center'>Match your resume with a job, effortlessly</h2>")
+    chatbot = gr.Chatbot(elem_id="chatbot", bubble_full_width=False, type="messages", min_height=700, min_width=700, label="Resume Matcher Chat", show_copy_all_button=True)
 
     chat_input = gr.MultimodalTextbox(
         interactive=True,
@@ -118,4 +122,4 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Resume Matcher") as demo:
     bot_msg = chat_msg.then(bot, chatbot, chatbot, api_name="bot_response")
     bot_msg.then(lambda: gr.MultimodalTextbox(interactive=True), None, [chat_input])
 
-app = gr.mount_gradio_app(app, demo, "/")
+app = gr.mount_gradio_app(app, demo, "")
