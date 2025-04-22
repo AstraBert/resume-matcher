@@ -1,24 +1,43 @@
 name: resume-matcher
 
 services:
-  app:
+  resume_matcher_app:
     build:
       context: .
       dockerfile: Dockerfile.app
     ports:
-      - 7500:7500
+      - 7501:80
     secrets:
       - groq_key
       - llamacloud_key
-  mcp_server:
+    networks:
+      - nginxproxymanager_default
+  resume_matcher_mcp_server:
     build: 
       context: .
       dockerfile: Dockerfile.mcp_server
     ports:
-      - 8000:8000
+      - 7502:8000
     secrets:
       - groq_key
       - linkup_key 
+    networks:
+      - nginxproxymanager_default
+  resume_matcher_register:
+    build: 
+      context: .
+      dockerfile: Dockerfile.register
+    ports:
+      - 7503:80
+    secrets:
+      - supa_key
+      - supa_url
+    networks:
+      - nginxproxymanager_default
+
+networks:
+  nginxproxymanager_default:
+    external: true
 
 secrets:
   groq_key:
@@ -27,3 +46,7 @@ secrets:
     environment: linkup_api_key
   llamacloud_key:
     environment: llamacloud_api_key
+  supa_key:
+    environment: supabase_key
+  supa_url:
+    environment: supabase_url

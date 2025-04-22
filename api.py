@@ -91,7 +91,7 @@ def bot(history: list):
     else:
         resume_path = msgs[0]["content"][0]
         parsed_resume = resume_parser(resume_path)
-        response = rq.post("http://localhost:7500/chat", json=ApiInput(resume=parsed_resume).model_dump())
+        response = rq.post("http://localhost:80/chat", json=ApiInput(resume=parsed_resume).model_dump())
         if response.status_code == 200:
             res_json = response.json()
             agent_process = res_json["process"]

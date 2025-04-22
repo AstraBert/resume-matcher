@@ -1,0 +1,29 @@
+name: resume-matcher
+
+services:
+  resume_matcher_app:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    ports:
+      - 7500:80
+    secrets:
+      - groq_key
+      - llamacloud_key
+  resume_matcher_mcp_server:
+    build: 
+      context: .
+      dockerfile: Dockerfile.mcp_server
+    ports:
+      - 8000:8000
+    secrets:
+      - groq_key
+      - linkup_key 
+  
+secrets:
+  groq_key:
+    environment: groq_api_key
+  linkup_key:
+    environment: linkup_api_key
+  llamacloud_key:
+    environment: llamacloud_api_key
