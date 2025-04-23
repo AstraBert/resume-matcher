@@ -10,15 +10,31 @@ services:
     secrets:
       - groq_key
       - llamacloud_key
+      - supa_key
+      - supa_url
+      - internal_key
   resume_matcher_mcp_server:
     build: 
       context: .
       dockerfile: Dockerfile.mcp_server
     ports:
-      - 8000:8000
+      - 8001:8000
     secrets:
       - groq_key
       - linkup_key 
+  resume_matcher_register:
+    build: 
+      context: .
+      dockerfile: Dockerfile.register
+    ports:
+      - 7860:80
+    secrets:
+      - supa_key
+      - supa_url
+  resume_matcher_redis:
+    image: redis 
+    ports:
+      - 6379:6379
   
 secrets:
   groq_key:
@@ -27,3 +43,9 @@ secrets:
     environment: linkup_api_key
   llamacloud_key:
     environment: llamacloud_api_key
+  supa_key:
+    environment: supabase_key
+  supa_url:
+    environment: supabase_url
+  internal_key:
+    environment: internal_api_key

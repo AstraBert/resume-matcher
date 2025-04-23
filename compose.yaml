@@ -6,10 +6,13 @@ services:
       context: .
       dockerfile: Dockerfile.app
     ports:
-      - 7501:80
+      - 7500:80
     secrets:
       - groq_key
       - llamacloud_key
+      - supa_key
+      - supa_url
+      - internal_key
     networks:
       - nginxproxymanager_default
   resume_matcher_mcp_server:
@@ -34,6 +37,12 @@ services:
       - supa_url
     networks:
       - nginxproxymanager_default
+  resume_matcher_redis:
+    image: redis 
+    ports:
+      - 7504:6379
+    networks:
+        - nginxproxymanager_default
 
 networks:
   nginxproxymanager_default:
@@ -50,3 +59,5 @@ secrets:
     environment: supabase_key
   supa_url:
     environment: supabase_url
+  internal_key:
+    environment: internal_api_key

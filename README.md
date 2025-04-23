@@ -1,17 +1,17 @@
-<h1 align='center'>Resume Matcher</h1>
+<h1 align='center'>Match-Your-Resume</h1>
 <h2 align='center'>Match your resume with a job, effortlessly</h2>
 
 <div align="center">
-    <h3>If you find Resume Matcher useful, please consider to donate and support the project:</h3>
+    <h3>If you find Match-Your-Resume useful, please consider to donate and support the project:</h3>
     <a href="https://github.com/sponsors/AstraBert"><img src="https://img.shields.io/badge/sponsor-30363D?style=for-the-badge&logo=GitHub-Sponsors&logoColor=#EA4AAA" alt="GitHub Sponsors Badge"></a>
 </div>
 <br>
 <div align="center">
-    <img src="logo.png" alt="LlamaResearcher Logo" width=150 height=150>
+    <img src="logo.png" alt="LlamaResearcher Logo" width=300 height=300>
 </div>
 <br>
 
-Resume Matcher is your a friendly tool to match your resume with the latest job openings on the market, powered by [Groq](https://groq.com), [LinkUp](https://linkup.so), [LlamaIndex](https://www.llamaindex.ai), [Gradio](https://gradio.app) and [FastAPI](https://fastapi.tiangolo.com)
+**Match-Your-Resume** is your a friendly tool to match your resume with the latest job openings on the market, powered by [Groq](https://groq.com), [LinkUp](https://linkup.so), [LlamaIndex](https://www.llamaindex.ai), [Gradio](https://gradio.app) and [FastAPI](https://fastapi.tiangolo.com)
 
 ## Install and launch🚀
 
@@ -26,10 +26,12 @@ cd resume-matcher
 
 Once there, you can follow this approach
 
-- Add the `groq_api_key`, `linkup_api_key`and `llamacloud_api_key` variable in the [`.env.example`](./.env.example) file and modify the name of the file to `.env`. Get these keys:
+- Add the `groq_api_key`, `linkup_api_key`, `llamacloud_api_key`, `supabase_key`, `supabase_url` and `internal_api_key` variable in the [`.env.example`](./.env.example) file and modify the name of the file to `.env`. Get these keys:
     + [On Groq Console](https://console.groq.com/keys)
     + [On Linkup Dashboard](https://app.linkup.so/api-keys)
     + [On LlamaCloud Dashboard](https://cloud.llamaindex.ai/)
+    + [On Supabase Console](https://supabase.co)
+    + Create your own internal API key
 
 ```bash
 mv .env.example .env
@@ -112,13 +114,21 @@ mv .env.example .env
 - And now launch the docker containers:
 
 ```bash
-docker compose up -f compose.local.yaml mcp_server -d
-docker compose up -f compose.local.yaml app -d
+docker compose -f compose.local.yaml up resume_matcher_redis resume_matcher_register -d
+docker compose -f compose.local.yaml up resume_matcher_mcp_server -d
+docker compose -f compose.local.yaml up resume_matcher_app -d
 ```
 
-You will see the application running on http://localhost:7500 and you will be able to use it. Depending on your connection and on your hardware, the set up might take some time (up to 15 mins to set up) - but this is only for the first time your run it!
+You can register yourself as a user on http://localhost:7860 and you can login to the application on http://localhost:7500. Depending on your connection and on your hardware, the set up might take some time (up to 15 mins to set up) - but this is only for the first time your run it!
 
 ## How it works
+
+### Database services
+
+- **Redis** is used for API rate limiting control
+- **Supabase** is used for user management and registration
+
+You must have a Postgres instance running externally, in which you will see the analytics of the searches that LlamaResearcher performs.
 
 ### Workflow
 

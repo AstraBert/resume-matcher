@@ -2,8 +2,13 @@ from llama_index.tools.mcp import McpToolSpec, BasicMCPClient
 from llama_index.llms.groq import Groq
 from llama_index.core.agent.workflow import AgentWorkflow, FunctionAgent, ToolCall, ToolCallResult
 from utils import ChatHistory
-from fastapi import FastAPI
+import redis.asyncio as redis
+from contextlib import asynccontextmanager
+from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi_limiter import FastAPILimiter
+from fastapi_limiter.depends import RateLimiter
 from llama_cloud_services import LlamaExtract
+from auth import authenticate_user
 from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel
 import json
@@ -17,7 +22,24 @@ class ApiOutput(BaseModel):
     response: str
     process: str
 
-app = FastAPI(default_response_class=ORJSONResponse)
+with open("/run/secrets/internal_key", "r") as f:
+    internal_key = f.read()
+f.close()
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    redis_connection = redis.from_url("redis://resume_matcher_redis:6379", encoding="utf8")
+    await FastAPILimiter.init(redis_connection)
+    yield
+    await FastAPILimiter.close()
+
+app = FastAPI(default_response_class=ORJSONResponse, lifespan=lifespan)
+
+async def check_api_key(x_api_key: str = Header(None)):
+    if x_api_key == internal_key:
+        return x_api_key
+    else:
+        raise HTTPException(status_code=401, detail="Invalid API key")
 
 with open("/run/secrets/llamacloud_key") as f:
     llamacloud_api_key = f.read()
@@ -28,20 +50,20 @@ with open("/run/secrets/groq_key") as g:
 g.close()
 
 hist = ChatHistory()
-mcp_client = BasicMCPClient("http://mcp_server:8000/sse")
+mcp_client = BasicMCPClient("http://resume_matcher_mcp_server:8000/sse")
 mcp_tools = McpToolSpec(mcp_client)
 llm = Groq(model="llama-3.3-70b-versatile", api_key=groq_api_key)
 extractor = LlamaExtract(api_key=llamacloud_api_key)
 extractor_agent = extractor.get_agent(name="resume-parser")
 
-@app.post("/chat")
-async def chat(inpt: ApiInput) -> ApiOutput:
+@app.post("/chat", dependencies=[Depends(RateLimiter(times=10, seconds=60))])
+async def chat(inpt: ApiInput, x_api_key: str = Depends(check_api_key)) -> ApiOutput:
     tools = await mcp_tools.to_tool_list_async()
     agent = FunctionAgent(
         llm = llm,
         name = "ResumeMatcher",
         description="Useful to match resume with jobs scraped from the web",
-        system_prompt="You are the ResumeMatcher agent. Your task is to match a resume with jobs you can find from the web, evaluate the matches and return to the user a comprehensive summary of these matches, using the available tools. You should follow this workflow:\n1. Starting from the candidate description deriving from the resume, transform it into a job searching query to retrieve the top 5 jobs that fit the candidate profile, using the 'job_searcher' tool\n2. With the information derived from step (1), pass the candidate profile (from the input resume data) and the jobs (in the same JSON string format as you got them from step (1)) to the 'evaluate_job_match' tool.\n\n3. From the job matching evaluation that you got from step (2), create a final response that summarizes the jobs and reports their match with the candidate. Don't forget to mention the company offering the job, the link to the job posting and the job title.\n\nDo not stop unless you completed step (1) and (2) and you created a final response.",
+        system_prompt="You are the ResumeMatcher agent. Your task is to match a resume with jobs you can find from the web, evaluate the matches and return to the user a comprehensive summary of these matches, using the available tools. You should follow this workflow:\n1. Starting from the candidate description deriving from the resume, transform it into a job searching query to retrieve the top matching jobs that fit the candidate profile, using the 'job_searcher' tool\n2. With the information derived from step (1), pass the candidate profile (from the input resume data) and the jobs (in the same JSON string format as you got them from step (1)) to the 'evaluate_job_match' tool.\n\n3. From the job matching evaluation that you got from step (2), create a final response that summarizes the jobs and reports their match with the candidate. Don't forget to mention the company offering the job, the link to the job posting and the job title.\n\nDo not stop unless you completed step (1) and (2) and you created a final response.",
         tools = tools
     )
     workflow = AgentWorkflow(
@@ -73,53 +95,37 @@ def resume_parser(path_to_resume: str):
     """
     return formatted_data
 
-def add_message(history: list, message: dict):
-    for x in message["files"]:
-        history.append({"role": "user", "content": {"path": x}})
-    if message["text"] is not None:
-        history.append({"role": "user", "content": message["text"]})
-    return history, gr.MultimodalTextbox(value=None, interactive=False)
-
-def bot(history: list):
-    messages = history.copy()
-    messages.reverse()
-    print(messages)
-    msgs = [msg for msg in messages if isinstance(msg["content"], tuple)]
-    if len(msgs) == 0:
-        history.append({"role": "assistant", "content": "There is no attached resume"})
-        return history
+def bot(resume_path: str):
+    headers = {"Content-Type": "application/json", "x-api-key": internal_key}
+    parsed_resume = resume_parser(resume_path)
+    response = rq.post("http://localhost:80/chat", json=ApiInput(resume=parsed_resume).model_dump(), headers=headers)
+    if response.status_code == 200:
+        res_json = response.json()
+        agent_process = res_json["process"]
+        answer = res_json["response"]
+        return f"<details>\n\t<summary><b>Agentic Process</b></summary>\n\n{agent_process}\n\n</details>\n\n" + answer
     else:
-        resume_path = msgs[0]["content"][0]
-        parsed_resume = resume_parser(resume_path)
-        response = rq.post("http://localhost:80/chat", json=ApiInput(resume=parsed_resume).model_dump())
-        if response.status_code == 200:
-            res_json = response.json()
-            agent_process = res_json["process"]
-            answer = res_json["response"]
-            history.append({"role": "assistant", "content": f"<details>\n\t<summary><b>Agentic Process</b></summary>\n\n{agent_process}\n\n</details>\n\n"})
-            history.append({"role": "assistant", "content": answer})
-            return history
-        else:
-            history.append({"role": "assistant", "content": "An error occurred while generating your response"})
-            return history
+        return "An error occurred while generating your response. Please feel free to report any error to [GitHub Discussions](https://github.com/AstraBert/resume-matcher/discussions)."
 
-with gr.Blocks(theme=gr.themes.Soft(), title="Resume Matcher") as demo:
-    title = gr.HTML("<h1 align='center'>Resume Matcher</h1>\n<h2 align='center'>Match your resume with a job, effortlessly</h2>")
-    chatbot = gr.Chatbot(elem_id="chatbot", bubble_full_width=False, type="messages", min_height=700, min_width=700, label="Resume Matcher Chat", show_copy_all_button=True)
+with gr.Blocks(theme=gr.themes.Soft(), title="Match-Your-Resume") as demo:
+    title = gr.HTML("<h2 align='center'>Match your resume with a job, effortlessly</h2>")
+    with gr.Row():
+        with gr.Column():
+            chat_input = gr.File(label="Upload your resume here", file_count="single", file_types=[".pdf", ".PDF", ".docx", ".DOCX", ".doc", ".DOC"])
+            md_output = gr.Markdown(label="Matches", container=True, value="### No resume uploaded yet", show_label=True, show_copy_button=True)
+            btn = gr.Button("Match your resume!⚗️").click(fn=bot, inputs=[chat_input], outputs=[md_output])
 
-    chat_input = gr.MultimodalTextbox(
-        interactive=True,
-        file_count="single",
-        file_types=[".pdf",".PDF", ".docx", ".doc", ".DOCX", ".DOC"],
-        placeholder="Enter message or upload file...",
-        show_label=False,
-        sources=["upload"],
-    )
+with gr.Blocks() as donation:
+    gr.HTML("""<h2 align="center">If you find Match-Your-Resume useful, please consider to support us through donation:</h2>
+<div align="center">
+    <a href="https://github.com/sponsors/AstraBert"><img src="https://img.shields.io/badge/sponsor-30363D?style=for-the-badge&logo=GitHub-Sponsors&logoColor=#EA4AAA" alt="GitHub Sponsors Badge"></a>
+</div>""")
+    gr.HTML("<h3 align='center'>Your donation is crucial to keep this project open source and free for everyone, forever: thanks in advance!🙏</h3>")
+    gr.HTML("<br>")
+    gr.HTML("""<div align='center'>
+        <img src="https://pnjuuftbupelnuqgkyko.supabase.co/storage/v1/object/sign/image/024b6975-855f-4ea1-8602-165a5020c3c1.png?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InN0b3JhZ2UtdXJsLXNpZ25pbmcta2V5XzA1ZDUyOWFhLTU3YzktNDBhYS1hMDczLWI0OGYwNmI3YTAxMSJ9.eyJ1cmwiOiJpbWFnZS8wMjRiNjk3NS04NTVmLTRlYTEtODYwMi0xNjVhNTAyMGMzYzEucG5nIiwiaWF0IjoxNzQ1MzIyNDY2LCJleHAiOjIwNjA2ODI0NjZ9.GJ4pnYCB9p37WvONhyA20307PbJRo8tGdYI48NVdkKg" alt="Match-Your-Resume">
+</div>""")
 
-    chat_msg = chat_input.submit(
-        add_message, [chatbot, chat_input], [chatbot, chat_input]
-    )
-    bot_msg = chat_msg.then(bot, chatbot, chatbot, api_name="bot_response")
-    bot_msg.then(lambda: gr.MultimodalTextbox(interactive=True), None, [chat_input])
+iface = gr.TabbedInterface(interface_list=[donation, demo], tab_names=["Home Page🏠", "Match your resume!💼"],theme=gr.themes.Soft(), title="Match-Your-Resume")
 
-app = gr.mount_gradio_app(app, demo, "")
+app = gr.mount_gradio_app(app, iface, "", auth=authenticate_user, auth_message="Input your username and password. If you are not already registered, go to <a href='https://register.match-your-resume.fyi'><u>the registration page</u></a>.<br><u><a href='https://register.match-your-resume.fyi'>Forgot your password?</a></u>")
